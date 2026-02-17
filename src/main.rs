@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use clap::{Parser, Subcommand, ValueEnum};
@@ -12,6 +13,8 @@ use fw_fanctrl::controller::FanController;
 use fw_fanctrl::error::Result;
 use fw_fanctrl::hardware::HardwareController;
 use fw_fanctrl::socket::{start_socket_server, ControllerHandle};
+
+
 
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
@@ -70,6 +73,16 @@ enum Command {
     },
 }
 
+fn run_socket_command(cmd: &str, args: Option<&str>, format: OutputFormat) -> Result<()> {
+    let full_cmd = match args {
+        Some(a) => format!("{} {}", cmd, a),
+        None => cmd.to_string(),
+    };
+    let result = send_command(&full_cmd)?;
+    print_result(&result, format);
+    Ok(())
+}
+
 fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
 
@@ -85,29 +98,23 @@ fn main() -> Result<()> {
             run_service(config, strategy, silent, no_battery_sensors)?;
         }
         Some(Command::Use { strategy }) => {
-            let result = send_command(&format!("use {}", strategy))?;
-            print_result(&result, cli.output_format);
+            run_socket_command("use", Some(&strategy), cli.output_format)?;
         }
         Some(Command::Reset) => {
-            let result = send_command("reset")?;
-            print_result(&result, cli.output_format);
+            run_socket_command("reset", None, cli.output_format)?;
         }
         Some(Command::Reload) => {
-            let result = send_command("reload")?;
-            print_result(&result, cli.output_format);
+            run_socket_command("reload", None, cli.output_format)?;
         }
         Some(Command::Pause) => {
-            let result = send_command("pause")?;
-            print_result(&result, cli.output_format);
+            run_socket_command("pause", None, cli.output_format)?;
         }
         Some(Command::Resume) => {
-            let result = send_command("resume")?;
-            print_result(&result, cli.output_format);
+            run_socket_command("resume", None, cli.output_format)?;
         }
         Some(Command::Print { selection }) => {
-            let selection = selection.unwrap_or_else(|| "all".to_string());
-            let result = send_command(&format!("print {}", selection))?;
-            print_result(&result, cli.output_format);
+            let args = selection.unwrap_or_else(|| "all".to_string());
+            run_socket_command("print", Some(&args), cli.output_format)?;
         }
         Some(Command::SanityCheck { fan, temp, all }) => {
             let check_all = all || (!fan && !temp);
@@ -143,9 +150,11 @@ fn run_service(
             ctrl.enable_auto_fan()?;
         }
 
+        let shutdown = Arc::new(AtomicBool::new(false));
         let server_handle = Arc::clone(&controller_handle);
-        tokio::spawn(async move {
-            if let Err(e) = start_socket_server(server_handle).await {
+        let shutdown_clone = Arc::clone(&shutdown);
+        let socket_task = tokio::spawn(async move {
+            if let Err(e) = start_socket_server(server_handle, shutdown_clone).await {
                 tracing::error!("Socket server error: {}", e);
             }
         });
@@ -171,22 +180,19 @@ fn run_service(
                     break;
                 }
                 _ = sleep(Duration::from_secs(1)) => {
-                    let result = {
-                        let mut ctrl = controller_handle.lock().await;
-                        ctrl.step()
-                    };
-
-                    match result {
+                    let mut ctrl = controller_handle.lock().await;
+                    match ctrl.step() {
                         Ok(temp) => {
                             if !silent {
-                                let ctrl = controller_handle.lock().await;
                                 let strategy_name = ctrl.get_current_strategy_name();
+                                let speed = ctrl.get_current_speed();
+                                let active = ctrl.is_active();
                                 println!(
                                     "{:<15} {:<10.1} {:<10} {:<10}",
                                     strategy_name,
                                     temp,
-                                    ctrl.get_current_speed(),
-                                    ctrl.is_active()
+                                    speed,
+                                    active
                                 );
                             }
                         }
@@ -197,6 +203,11 @@ fn run_service(
                 }
             }
         }
+
+        tracing::info!("Shutting down socket server...");
+        shutdown.store(true, Ordering::Relaxed);
+        let _ = socket_task.await;
+        tracing::info!("Socket server shut down");
 
         let cleanup_result = {
             let ctrl = controller_handle.lock().await;
@@ -272,6 +283,16 @@ fn print_result(result: &str, format: OutputFormat) {
     }
 }
 
+fn print_check_result<T>(name: &str, result: Result<T>, print_ok: impl FnOnce(&T)) {
+    match result {
+        Ok(val) => print_ok(&val),
+        Err(e) => {
+            println!("{}: FAILED", name);
+            eprintln!("  Error: {}", e);
+        }
+    }
+}
+
 fn run_sanity_check(check_all: bool, check_fan: bool, check_temp: bool) -> Result<()> {
     let hw = HardwareController::new(false)?;
 
@@ -279,24 +300,19 @@ fn run_sanity_check(check_all: bool, check_fan: bool, check_temp: bool) -> Resul
 
     // Temperature check
     if check_all || check_temp {
-        match hw.check_temperature() {
-            Ok(t) => println!("Temperature: {:>5.1}°C - OK", t),
-            Err(e) => {
-                println!("Temperature: FAILED");
-                eprintln!("  Error: {}", e);
-            }
-        }
+        print_check_result("Temperature", hw.check_temperature(), |t| {
+            println!("Temperature: {:>5.1}°C - OK", t)
+        });
     }
 
     // Power check
-    match hw.is_on_ac() {
-        Ok(true) => println!("Power:       AC connected - OK"),
-        Ok(false) => println!("Power:       Battery - OK"),
-        Err(e) => {
-            println!("Power:       FAILED");
-            eprintln!("  Error: {}", e);
+    print_check_result("Power", hw.is_on_ac(), |on_ac| {
+        if *on_ac {
+            println!("Power:       AC connected - OK")
+        } else {
+            println!("Power:       Battery - OK")
         }
-    }
+    });
 
     // Fan check
     if check_all || check_fan {
@@ -315,6 +331,11 @@ fn run_sanity_check(check_all: bool, check_fan: bool, check_temp: bool) -> Resul
             }
         }
     }
+
+    // Always restore auto fan mode at the end
+    print_check_result("Fan mode", hw.enable_auto_fan(), |_| {
+        println!("Fan mode: Auto")
+    });
 
     println!("\n=== Done ===");
     Ok(())

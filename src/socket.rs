@@ -2,9 +2,12 @@ use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 
 use crate::controller::FanController;
 use crate::error::{Error, Result};
@@ -14,7 +17,10 @@ pub const COMMANDS_SOCKET_FILE_PATH: &str = "/run/fw-fanctrl/.fw-fanctrl.command
 
 pub type ControllerHandle = Arc<Mutex<FanController>>;
 
-pub async fn start_socket_server(controller: ControllerHandle) -> Result<()> {
+pub async fn start_socket_server(
+    controller: ControllerHandle,
+    shutdown: Arc<AtomicBool>,
+) -> Result<()> {
     let socket_path = PathBuf::from(COMMANDS_SOCKET_FILE_PATH);
     let folder_path = PathBuf::from(SOCKET_FOLDER_PATH);
 
@@ -29,26 +35,53 @@ pub async fn start_socket_server(controller: ControllerHandle) -> Result<()> {
     let listener = UnixListener::bind(&socket_path)
         .map_err(|e| Error::Socket(format!("Failed to bind socket: {}", e)))?;
 
+    listener
+        .set_nonblocking(true)
+        .map_err(|e| Error::Socket(format!("Failed to set nonblocking: {}", e)))?;
+
     std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o777))
         .map_err(|e| Error::Socket(format!("Failed to set socket permissions: {}", e)))?;
 
     tracing::info!("Socket server listening on {}", COMMANDS_SOCKET_FILE_PATH);
 
-    loop {
-        match listener.accept() {
-            Ok((mut stream, _addr)) => {
-                let controller = Arc::clone(&controller);
-                tokio::spawn(async move {
-                    if let Err(e) = handle_connection(&mut stream, controller).await {
-                        tracing::error!("Error handling connection: {}", e);
-                    }
-                });
+    let shutdown_check = Arc::clone(&shutdown);
+    let accept_task: JoinHandle<Result<()>> = tokio::task::spawn_blocking(move || {
+        loop {
+            if shutdown_check.load(Ordering::Relaxed) {
+                tracing::info!("Socket server received shutdown signal");
+                break Ok(());
             }
-            Err(e) => {
-                tracing::error!("Accept error: {}", e);
+
+            match listener.accept() {
+                Ok((mut stream, _addr)) => {
+                    let controller = Arc::clone(&controller);
+                    tokio::spawn(async move {
+                        if let Err(e) = handle_connection(&mut stream, controller).await {
+                            tracing::error!("Error handling connection: {}", e);
+                        }
+                    });
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                Err(e) => {
+                    tracing::error!("Accept error: {}", e);
+                }
             }
         }
+    });
+
+    let _ = accept_task.await.map_err(|e| {
+        Error::Socket(format!("Socket accept task failed: {}", e))
+    })?;
+
+    tracing::info!("Socket server shutting down");
+
+    if socket_path.exists() {
+        let _ = std::fs::remove_file(&socket_path);
     }
+
+    Ok(())
 }
 
 async fn handle_connection(
