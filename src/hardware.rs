@@ -1,21 +1,57 @@
 use framework_lib::chromium_ec::{CrosEc, CrosEcDriver};
 use framework_lib::power;
+use framework_lib::smbios::Platform;
 
 use crate::error::{Error, Result};
 
 const EC_MEMMAP_TEMP_SENSOR: u16 = 0x00;
 
+fn get_battery_sensor_index(platform: Option<Platform>) -> Option<usize> {
+    match platform {
+        // Based on framework_lib/src/power.rs sensor mappings
+        // Index 3 = Battery for Intel Gen 11/12/13
+        Some(Platform::IntelGen11 | Platform::IntelGen12 | Platform::IntelGen13) => Some(3),
+        // Index 2 = Battery for Intel Core Ultra 1
+        Some(Platform::IntelCoreUltra1) => Some(2),
+        // Index 3 = Battery for Framework 12 Gen 13
+        Some(Platform::Framework12IntelGen13) => Some(3),
+        // AMD platforms (7040/AI300): No separate battery sensor in EC memory map
+        // Framework 16: Different sensor layout with dGPU
+        // These platforms should use max temp from all sensors
+        _ => None,
+    }
+}
+
 pub struct HardwareController {
     ec: CrosEc,
-    no_battery_sensors: bool,
+    battery_sensor_index: Option<usize>,
+    platform_name: String,
 }
 
 impl HardwareController {
     pub fn new(no_battery_sensors: bool) -> Result<Self> {
         let ec = CrosEc::new();
+
+        let platform = framework_lib::smbios::get_platform();
+        let platform_name = format!("{:?}", platform);
+
+        // Only determine battery sensor index if flag is set
+        let battery_index = if no_battery_sensors {
+            get_battery_sensor_index(platform)
+        } else {
+            None
+        };
+
+        tracing::info!(
+            "Platform: {}, Battery sensor index to exclude: {:?}",
+            platform_name,
+            battery_index
+        );
+
         Ok(Self {
             ec,
-            no_battery_sensors,
+            battery_sensor_index: battery_index,
+            platform_name,
         })
     }
 
@@ -27,28 +63,49 @@ impl HardwareController {
 
         // Filter invalid values (0xFF=NotPresent, 0xFE=Error, 0xFD=NotPowered, 0xFC=NotCalibrated)
         // and convert from EC raw value to Celsius (subtract 73)
-        let valid_temps: Vec<u8> = temps
+        let valid_temps: Vec<(usize, u8)> = temps
             .iter()
             .copied()
-            .filter(|&t| t < 0xFC)
-            .map(|t| t.saturating_sub(73))
-            .filter(|&t| t > 0)
+            .enumerate()
+            .filter(|(_, t)| *t < 0xFC)
+            .map(|(i, t)| (i, t.saturating_sub(73)))
+            .filter(|(_, t)| *t > 0)
             .collect();
+
+        tracing::debug!("Raw temperature sensors: {:02x?}", temps);
+        tracing::debug!(
+            "Valid temperature sensors (index, Celsius): {:?}",
+            valid_temps
+        );
 
         if valid_temps.is_empty() {
             return Ok(50.0);
         }
 
-        let max_temp = if self.no_battery_sensors && valid_temps.len() > 1 {
-            // Exclude last sensor (battery) if flag set
-            *valid_temps
+        let max_temp = if let Some(battery_idx) = self.battery_sensor_index {
+            // Exclude the battery sensor at the known index
+            let non_battery: Vec<u8> = valid_temps
                 .iter()
-                .take(valid_temps.len() - 1)
-                .max()
-                .unwrap()
+                .filter(|(i, _)| *i != battery_idx)
+                .map(|(_, t)| *t)
+                .collect();
+
+            if non_battery.is_empty() {
+                // If all sensors were filtered out, fall back to max of all
+                *valid_temps.iter().map(|(_, t)| t).max().unwrap()
+            } else {
+                *non_battery.iter().max().unwrap()
+            }
         } else {
-            *valid_temps.iter().max().unwrap()
+            // No battery exclusion (unknown platform or flag not set) - use max of all
+            *valid_temps.iter().map(|(_, t)| t).max().unwrap()
         };
+
+        tracing::debug!(
+            "Selected max temperature: {}°C (platform: {})",
+            max_temp,
+            self.platform_name
+        );
 
         Ok(max_temp as f64)
     }
