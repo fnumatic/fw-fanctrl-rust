@@ -3,7 +3,9 @@ use std::sync::Arc;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
+use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::Mutex;
+use tokio::time::{sleep, Duration};
 
 use fw_fanctrl::config::{Config, DEFAULT_CONFIG_PATH};
 use fw_fanctrl::controller::FanController;
@@ -134,54 +136,80 @@ fn run_service(
 
     let controller_handle: ControllerHandle = Arc::new(Mutex::new(controller));
 
-    let server_handle = Arc::clone(&controller_handle);
-    std::thread::spawn(move || {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async move {
+    let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+    rt.block_on(async move {
+        {
+            let ctrl = controller_handle.lock().await;
+            ctrl.enable_auto_fan()?;
+        }
+
+        let server_handle = Arc::clone(&controller_handle);
+        tokio::spawn(async move {
             if let Err(e) = start_socket_server(server_handle).await {
                 tracing::error!("Socket server error: {}", e);
             }
         });
-    });
 
-    if !silent {
-        println!(
-            "{:<15} {:<10} {:<10} {:<10}",
-            "Strategy", "Temp", "Speed", "Active"
-        );
-    }
+        if !silent {
+            println!(
+                "{:<15} {:<10} {:<10} {:<10}",
+                "Strategy", "Temp", "Speed", "Active"
+            );
+        }
 
-    loop {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let result = rt.block_on(async {
-            let mut ctrl = controller_handle.lock().await;
-            ctrl.step()
-        });
+        let mut sigterm = signal(SignalKind::terminate())?;
+        let mut sigint = std::pin::pin!(tokio::signal::ctrl_c());
 
-        match result {
-            Ok(temp) => {
-                let rt = tokio::runtime::Runtime::new().unwrap();
-                rt.block_on(async {
-                    let ctrl = controller_handle.lock().await;
-                    if !silent {
-                        let strategy_name = ctrl.get_current_strategy_name();
-                        println!(
-                            "{:<15} {:<10.1} {:<10} {:<10}",
-                            strategy_name,
-                            temp,
-                            ctrl.get_current_speed(),
-                            ctrl.is_active()
-                        );
+        loop {
+            tokio::select! {
+                _ = &mut sigint => {
+                    tracing::info!("Received SIGINT, switching fan to auto mode before exit");
+                    break;
+                }
+                _ = sigterm.recv() => {
+                    tracing::info!("Received SIGTERM, switching fan to auto mode before exit");
+                    break;
+                }
+                _ = sleep(Duration::from_secs(1)) => {
+                    let result = {
+                        let mut ctrl = controller_handle.lock().await;
+                        ctrl.step()
+                    };
+
+                    match result {
+                        Ok(temp) => {
+                            if !silent {
+                                let ctrl = controller_handle.lock().await;
+                                let strategy_name = ctrl.get_current_strategy_name();
+                                println!(
+                                    "{:<15} {:<10.1} {:<10} {:<10}",
+                                    strategy_name,
+                                    temp,
+                                    ctrl.get_current_speed(),
+                                    ctrl.is_active()
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!("Error in control loop: {}", e);
+                        }
                     }
-                });
-            }
-            Err(e) => {
-                tracing::error!("Error in control loop: {}", e);
+                }
             }
         }
 
-        std::thread::sleep(std::time::Duration::from_secs(1));
-    }
+        let cleanup_result = {
+            let ctrl = controller_handle.lock().await;
+            ctrl.enable_auto_fan()
+        };
+
+        if let Err(e) = cleanup_result {
+            tracing::error!("Failed to restore auto fan control on shutdown: {}", e);
+            return Err(e);
+        }
+
+        Ok(())
+    })
 }
 
 fn send_command(command: &str) -> Result<String> {

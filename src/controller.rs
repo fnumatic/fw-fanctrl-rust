@@ -142,6 +142,10 @@ impl FanController {
         Ok(())
     }
 
+    pub fn enable_auto_fan(&self) -> Result<()> {
+        self.hw.enable_auto_fan()
+    }
+
     pub fn is_active(&self) -> bool {
         self.active
     }
