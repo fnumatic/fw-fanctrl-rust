@@ -66,6 +66,9 @@ impl HardwareController {
             .ok_or_else(|| Error::Ec("Failed to read fan info from EC".into()))?;
 
         let duty = fans[4];
+        if duty > 100 {
+            return Ok(0);
+        }
         Ok(duty as u32)
     }
 
@@ -104,20 +107,23 @@ impl HardwareController {
     }
 
     pub fn test_fan_control(&self, steps: u32) -> Result<Vec<(u32, u16)>> {
-        let original_speed = self.get_fan_speed()?;
+        let original_speed = self.get_fan_speed().unwrap_or(0);
         let mut results = Vec::new();
 
         let speed_step = 100 / steps.max(1);
 
         for i in 1..=steps {
             let speed = (speed_step * i).min(100);
-            self.set_fan_speed(speed)?;
+            if let Err(e) = self.set_fan_speed(speed) {
+                let _ = self.set_fan_speed(original_speed.min(100));
+                return Err(e);
+            }
             std::thread::sleep(std::time::Duration::from_secs(2));
-            let rpm = self.get_fan_rpm()?;
+            let rpm = self.get_fan_rpm().unwrap_or(0);
             results.push((speed, rpm));
         }
 
-        self.set_fan_speed(original_speed)?;
+        let _ = self.set_fan_speed(original_speed.min(100));
 
         Ok(results)
     }
