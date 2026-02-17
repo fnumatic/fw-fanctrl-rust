@@ -203,6 +203,8 @@ StandardOutput=journal
 
 Then check logs: `journalctl -u fw-fanctrl -f`
 
+For design details, see `docs/temperature-sensor-discovery.md`.
+
 ## Third-party Integrations
 
 ### Gnome Shell Extension
