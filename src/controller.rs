@@ -158,10 +158,7 @@ impl FanController {
         let temp = self.get_actual_temperature()?;
 
         let strategy = self.get_current_strategy();
-        if self
-            .timecount
-            .is_multiple_of(strategy.fan_speed_update_frequency)
-        {
+        if self.timecount % strategy.fan_speed_update_frequency == 0 {
             self.adapt_speed(temp)?;
             self.timecount = 0;
         }

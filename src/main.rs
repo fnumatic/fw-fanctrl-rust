@@ -5,18 +5,11 @@ use clap::{Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
-mod config;
-mod controller;
-mod curve;
-mod error;
-mod hardware;
-mod socket;
-
-use config::{Config, DEFAULT_CONFIG_PATH};
-use controller::FanController;
-use error::Result;
-use hardware::HardwareController;
-use socket::{start_socket_server, ControllerHandle};
+use fw_fanctrl::config::{Config, DEFAULT_CONFIG_PATH};
+use fw_fanctrl::controller::FanController;
+use fw_fanctrl::error::Result;
+use fw_fanctrl::hardware::HardwareController;
+use fw_fanctrl::socket::{start_socket_server, ControllerHandle};
 
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
@@ -47,7 +40,7 @@ enum Command {
         #[clap(short, long)]
         strategy: Option<String>,
 
-        #[clap(short, long)]
+        #[clap(long)]
         silent: bool,
 
         #[clap(long)]
@@ -196,23 +189,23 @@ fn send_command(command: &str) -> Result<String> {
     use std::net::Shutdown;
     use std::os::unix::net::UnixStream;
 
-    let socket_path = socket::COMMANDS_SOCKET_FILE_PATH;
+    let socket_path = fw_fanctrl::socket::COMMANDS_SOCKET_FILE_PATH;
 
     let mut stream = UnixStream::connect(socket_path)
-        .map_err(|e| error::Error::Socket(format!("Failed to connect: {}", e)))?;
+        .map_err(|e| fw_fanctrl::error::Error::Socket(format!("Failed to connect: {}", e)))?;
 
     stream
         .write_all(command.as_bytes())
-        .map_err(|e| error::Error::Socket(format!("Failed to send: {}", e)))?;
+        .map_err(|e| fw_fanctrl::error::Error::Socket(format!("Failed to send: {}", e)))?;
 
     stream
         .shutdown(Shutdown::Write)
-        .map_err(|e| error::Error::Socket(format!("Failed to shutdown: {}", e)))?;
+        .map_err(|e| fw_fanctrl::error::Error::Socket(format!("Failed to shutdown: {}", e)))?;
 
     let mut response = String::new();
     stream
         .read_to_string(&mut response)
-        .map_err(|e| error::Error::Socket(format!("Failed to read: {}", e)))?;
+        .map_err(|e| fw_fanctrl::error::Error::Socket(format!("Failed to read: {}", e)))?;
 
     Ok(response)
 }
