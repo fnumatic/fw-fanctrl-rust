@@ -45,35 +45,33 @@ pub async fn start_socket_server(
     tracing::info!("Socket server listening on {}", COMMANDS_SOCKET_FILE_PATH);
 
     let shutdown_check = Arc::clone(&shutdown);
-    let accept_task: JoinHandle<Result<()>> = tokio::task::spawn_blocking(move || {
-        loop {
-            if shutdown_check.load(Ordering::Relaxed) {
-                tracing::info!("Socket server received shutdown signal");
-                break Ok(());
-            }
+    let accept_task: JoinHandle<Result<()>> = tokio::task::spawn_blocking(move || loop {
+        if shutdown_check.load(Ordering::Relaxed) {
+            tracing::info!("Socket server received shutdown signal");
+            break Ok(());
+        }
 
-            match listener.accept() {
-                Ok((mut stream, _addr)) => {
-                    let controller = Arc::clone(&controller);
-                    tokio::spawn(async move {
-                        if let Err(e) = handle_connection(&mut stream, controller).await {
-                            tracing::error!("Error handling connection: {}", e);
-                        }
-                    });
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    std::thread::sleep(Duration::from_millis(100));
-                }
-                Err(e) => {
-                    tracing::error!("Accept error: {}", e);
-                }
+        match listener.accept() {
+            Ok((mut stream, _addr)) => {
+                let controller = Arc::clone(&controller);
+                tokio::spawn(async move {
+                    if let Err(e) = handle_connection(&mut stream, controller).await {
+                        tracing::error!("Error handling connection: {}", e);
+                    }
+                });
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(e) => {
+                tracing::error!("Accept error: {}", e);
             }
         }
     });
 
-    let _ = accept_task.await.map_err(|e| {
-        Error::Socket(format!("Socket accept task failed: {}", e))
-    })?;
+    let _ = accept_task
+        .await
+        .map_err(|e| Error::Socket(format!("Socket accept task failed: {}", e)))?;
 
     tracing::info!("Socket server shutting down");
 

@@ -14,8 +14,6 @@ use fw_fanctrl::error::Result;
 use fw_fanctrl::hardware::HardwareController;
 use fw_fanctrl::socket::{start_socket_server, ControllerHandle};
 
-
-
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
 struct Cli {
