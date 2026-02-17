@@ -59,6 +59,16 @@ impl HardwareController {
             .map_err(|e| Error::Ec(format!("{:?}", e)))
     }
 
+    pub fn get_fan_speed(&self) -> Result<u32> {
+        let fans = self
+            .ec
+            .read_memory(0x10, 8)
+            .ok_or_else(|| Error::Ec("Failed to read fan info from EC".into()))?;
+
+        let duty = fans[4];
+        Ok(duty as u32)
+    }
+
     pub fn is_on_ac(&self) -> Result<bool> {
         let info = power::power_info(&self.ec)
             .ok_or_else(|| Error::Ec("Failed to read power info from EC".into()))?;
@@ -80,5 +90,40 @@ impl HardwareController {
 
         let rpm = u16::from_le_bytes([fans[0], fans[1]]);
         Ok(rpm)
+    }
+
+    pub fn check_temperature(&self) -> Result<f64> {
+        let temp = self.get_temperature()?;
+        if !(0.0..=100.0).contains(&temp) {
+            return Err(Error::Ec(format!(
+                "Temperature {}°C is out of valid range (0-100)",
+                temp
+            )));
+        }
+        Ok(temp)
+    }
+
+    pub fn test_fan_control(&self, steps: u32) -> Result<Vec<(u32, u16)>> {
+        let original_speed = self.get_fan_speed()?;
+        let mut results = Vec::new();
+
+        let speed_step = 100 / steps.max(1);
+
+        for i in 1..=steps {
+            let speed = (speed_step * i).min(100);
+            self.set_fan_speed(speed)?;
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            let rpm = self.get_fan_rpm()?;
+            results.push((speed, rpm));
+        }
+
+        self.set_fan_speed(original_speed)?;
+
+        Ok(results)
+    }
+
+    #[allow(dead_code)]
+    pub fn restore_fan(&self, speed: u32) -> Result<()> {
+        self.set_fan_speed(speed)
     }
 }

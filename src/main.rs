@@ -63,6 +63,16 @@ enum Command {
     Print {
         selection: Option<String>,
     },
+    SanityCheck {
+        #[clap(long)]
+        fan: bool,
+
+        #[clap(long)]
+        temp: bool,
+
+        #[clap(long, default_value = "true")]
+        all: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -103,6 +113,10 @@ fn main() -> Result<()> {
             let selection = selection.unwrap_or_else(|| "all".to_string());
             let result = send_command(&format!("print {}", selection))?;
             print_result(&result, cli.output_format);
+        }
+        Some(Command::SanityCheck { fan, temp, all }) => {
+            let check_all = all || (!fan && !temp);
+            run_sanity_check(check_all, fan, temp)?;
         }
         None => {
             eprintln!("Error: No command provided. Use --help for usage information.");
@@ -235,4 +249,52 @@ fn print_result(result: &str, format: OutputFormat) {
             }
         }
     }
+}
+
+fn run_sanity_check(check_all: bool, check_fan: bool, check_temp: bool) -> Result<()> {
+    let hw = HardwareController::new(false)?;
+
+    println!("=== Sanity Check ===\n");
+
+    // Temperature check
+    if check_all || check_temp {
+        match hw.check_temperature() {
+            Ok(t) => println!("Temperature: {:>5.1}°C - OK", t),
+            Err(e) => {
+                println!("Temperature: FAILED");
+                eprintln!("  Error: {}", e);
+            }
+        }
+    }
+
+    // Power check
+    match hw.is_on_ac() {
+        Ok(true) => println!("Power:       AC connected - OK"),
+        Ok(false) => println!("Power:       Battery - OK"),
+        Err(e) => {
+            println!("Power:       FAILED");
+            eprintln!("  Error: {}", e);
+        }
+    }
+
+    // Fan check
+    if check_all || check_fan {
+        println!("\nTesting fan control...");
+        match hw.test_fan_control(4) {
+            Ok(results) => {
+                println!("{:>6}  {:>6}", "Speed%", "RPM");
+                for (speed, rpm) in results {
+                    println!("{:>6}  {:>6}", speed, rpm);
+                }
+                println!("Fan control: OK (auto-restored)");
+            }
+            Err(e) => {
+                println!("Fan control: FAILED");
+                eprintln!("  Error: {}", e);
+            }
+        }
+    }
+
+    println!("\n=== Done ===");
+    Ok(())
 }
