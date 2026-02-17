@@ -188,6 +188,27 @@ cargo fmt
 cargo fmt --check && cargo clippy -- -D warnings && cargo test
 ```
 
+## Release
+
+Releases are automated via GitHub Actions. To create a new release:
+
+```bash
+# Install cargo-release (one time)
+cargo install cargo-release
+
+# Create a release (bumps version, creates tag, pushes)
+cargo release minor --no-publish --allow-dirty --execute
+git push --follow-tags
+```
+
+This will:
+1. Bump the version in Cargo.toml
+2. Create a git tag (e.g., v0.2.0)
+3. Push to GitHub
+4. CI will build and create a GitHub Release with the binary
+
+Use `major`, `minor`, or `patch` as needed.
+
 ## Credits
 
 - Original Python implementation: [TamtamHero/fw-fanctrl](https://github.com/TamtamHero/fw-fanctrl/)
