@@ -96,14 +96,14 @@ pub async fn process_command(command: &str, controller: ControllerHandle) -> Res
             controller.overwrite_strategy(strategy)?;
             Ok(format!(
                 "{{\"status\": \"success\", \"strategy\": \"{}\"}}",
-                controller.get_current_strategy().fan_speed_update_frequency
+                controller.get_current_strategy_name()
             ))
         }
         "reset" => {
             controller.clear_overwritten_strategy();
             Ok(format!(
                 "{{\"status\": \"success\", \"strategy\": \"{}\"}}",
-                controller.get_current_strategy().fan_speed_update_frequency
+                controller.get_current_strategy_name()
             ))
         }
         "reload" => {
@@ -140,11 +140,7 @@ async fn print_selection(selection: &str, controller: &mut FanController) -> Res
 
             let response = serde_json::json!({
                 "status": "success",
-                "strategy": if controller.is_overwritten() {
-                    controller.get_current_strategy().fan_speed_update_frequency.to_string()
-                } else {
-                    controller.get_config().default_strategy.clone()
-                },
+                "strategy": controller.get_current_strategy_name(),
                 "default": !controller.is_overwritten(),
                 "speed": controller.get_current_speed().to_string(),
                 "temperature": temp.to_string(),
@@ -162,7 +158,7 @@ async fn print_selection(selection: &str, controller: &mut FanController) -> Res
         .to_string()),
         "current" => Ok(serde_json::json!({
             "status": "success",
-            "strategy": controller.get_current_strategy().fan_speed_update_frequency.to_string(),
+            "strategy": controller.get_current_strategy_name(),
             "default": !controller.is_overwritten()
         })
         .to_string()),

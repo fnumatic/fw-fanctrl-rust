@@ -157,10 +157,7 @@ fn run_service(
                 rt.block_on(async {
                     let ctrl = controller_handle.lock().await;
                     if !silent {
-                        let strategy_name = ctrl
-                            .get_current_strategy()
-                            .fan_speed_update_frequency
-                            .to_string();
+                        let strategy_name = ctrl.get_current_strategy_name();
                         println!(
                             "{:<15} {:<10.1} {:<10} {:<10}",
                             strategy_name,

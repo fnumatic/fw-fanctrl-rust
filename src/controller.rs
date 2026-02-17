@@ -43,6 +43,23 @@ impl FanController {
         }
     }
 
+    pub fn get_current_strategy_name(&self) -> String {
+        if let Some(ref name) = self.overwritten_strategy {
+            return name.clone();
+        }
+
+        if self.hw.is_on_ac().unwrap_or(false) {
+            return self.config.default_strategy.clone();
+        }
+
+        let discharging = &self.config.strategy_on_discharging;
+        if discharging.is_empty() {
+            return self.config.default_strategy.clone();
+        }
+
+        discharging.clone()
+    }
+
     pub fn is_overwritten(&self) -> bool {
         self.overwritten_strategy.is_some()
     }
