@@ -4,10 +4,53 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version bump level
+        required: true
+        default: minor
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: write
 
 jobs:
-  release:
-    name: Release
+  bump-version:
+    name: Bump Version
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-release
+        run: cargo install --locked cargo-release
+
+      - name: Configure git user
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+
+      - name: Run cargo-release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: cargo release ${{ github.event.inputs.bump }} --no-publish --allow-dirty --execute
+
+      - name: Push release commits and tags
+        run: git push --follow-tags
+
+  publish-release:
+    name: Publish Release
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -15,13 +58,10 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install cargo-release
-        uses: taiki-e/cargo-install-action@v1
-        with:
-          crate: cargo-release
+      - name: Build release binary
+        run: cargo build --release
 
-      - name: Create release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          cargo release minor --no-publish --allow-dirty --execute
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: target/release/fw-fanctrl
