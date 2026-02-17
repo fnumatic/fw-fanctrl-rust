@@ -25,6 +25,7 @@ Supports all Framework Laptop models (13" / 16", Intel/AMD).
 - Compatible with Gnome extension
 - systemd service support
 - Diagnostic sanity-check command
+- Safe shutdown handling (SIGINT/SIGTERM restores EC auto fan mode)
 
 ## Requirements
 
@@ -111,6 +112,18 @@ fw-fanctrl --output-format json print all
 
 # Run diagnostics
 sudo fw-fanctrl sanity-check
+```
+
+### Shutdown Safety
+
+When running `fw-fanctrl run`, the service handles both `SIGINT` (Ctrl+C) and `SIGTERM`
+(for example from `systemctl stop`). On startup and shutdown it switches EC fan control
+back to automatic mode to avoid leaving the fan in manual mode.
+
+You can stop the service safely with:
+
+```bash
+sudo systemctl stop fw-fanctrl
 ```
 
 ## Configuration
