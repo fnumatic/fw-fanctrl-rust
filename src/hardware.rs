@@ -25,20 +25,31 @@ impl HardwareController {
             .read_memory(EC_MEMMAP_TEMP_SENSOR, 0x0F)
             .ok_or_else(|| Error::Ec("Failed to read temperature from EC".into()))?;
 
-        let mut valid_temps: Vec<u8> = temps.iter().copied().filter(|&t| t > 0).collect();
+        // Filter invalid values (0xFF=NotPresent, 0xFE=Error, 0xFD=NotPowered, 0xFC=NotCalibrated)
+        // and convert from EC raw value to Celsius (subtract 73)
+        let valid_temps: Vec<u8> = temps
+            .iter()
+            .copied()
+            .filter(|&t| t < 0xFC)
+            .map(|t| t.saturating_sub(73))
+            .filter(|&t| t > 0)
+            .collect();
 
         if valid_temps.is_empty() {
             return Ok(50.0);
         }
 
-        if self.no_battery_sensors {
-            valid_temps.truncate(valid_temps.len().saturating_sub(1));
-            if valid_temps.is_empty() {
-                return Ok(50.0);
-            }
-        }
+        let max_temp = if self.no_battery_sensors && valid_temps.len() > 1 {
+            // Exclude last sensor (battery) if flag set
+            *valid_temps
+                .iter()
+                .take(valid_temps.len() - 1)
+                .max()
+                .unwrap()
+        } else {
+            *valid_temps.iter().max().unwrap()
+        };
 
-        let max_temp = *valid_temps.iter().max().unwrap();
         Ok(max_temp as f64)
     }
 
