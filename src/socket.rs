@@ -79,7 +79,11 @@ async fn handle_connection(
 }
 
 pub async fn process_command(command: &str, controller: ControllerHandle) -> Result<String> {
-    let parts: Vec<&str> = command.split_whitespace().collect();
+    // Filter out arguments starting with -- (e.g., --output-format=JSON)
+    let parts: Vec<&str> = command
+        .split_whitespace()
+        .filter(|s| !s.starts_with("--"))
+        .collect();
 
     if parts.is_empty() {
         return Err(Error::Command("Empty command".into()));
