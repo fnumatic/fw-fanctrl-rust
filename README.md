@@ -169,6 +169,40 @@ Configuration file: `/etc/fw-fanctrl/config.json`
 | `movingAverageInterval` | Temperature averaging window (seconds) |
 | `speedCurve` | Temperature → fan speed mapping |
 
+### Temperature Sensors
+
+The service reads temperature from the EC (Embedded Controller) via framework_lib.
+Multiple temperature sensors are available on Framework laptops:
+
+| Sensor | Description |
+|--------|-------------|
+| CPU | Processor temperature |
+| DDR | Memory temperature |
+| Battery | Battery temperature (Intel platforms) |
+| APU | AMD processor temperature |
+| PECI | Platform Environmental Control Interface |
+| Skin | Chassis temperature (some models) |
+
+**Platform-specific behavior:**
+- **Intel platforms (Gen 11/12/13)**: Battery sensor at index 3
+- **Intel Core Ultra 1**: Battery sensor at index 2
+- **AMD platforms (7040/AI300)**: No separate battery sensor - uses max of all sensors
+- **Framework 16**: Different sensor layout with dGPU sensors
+
+**Excluding battery sensor:**
+Use `--no-battery-sensors` flag to exclude battery sensor from temperature calculation.
+
+**Debugging:**
+Set `Environment=RUST_LOG=debug` in service file to see sensor readings:
+
+```ini
+[Service]
+Environment=RUST_LOG=debug
+StandardOutput=journal
+```
+
+Then check logs: `journalctl -u fw-fanctrl -f`
+
 ## Third-party Integrations
 
 ### Gnome Shell Extension
