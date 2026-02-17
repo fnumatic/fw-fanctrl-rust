@@ -49,12 +49,13 @@ Create `/etc/systemd/system/fw-fanctrl.service`:
 ```ini
 [Unit]
 Description=Framework Fan Controller (Rust)
-After=network.target
+After=multi-user.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/fw-fanctrl run --config /etc/fw-fanctrl/config.json --silent
-Restart=on-failure
+Restart=always
+RestartSec=5
+ExecStart=/usr/local/bin/fw-fanctrl run --config /etc/fw-fanctrl/config.json --silent --no-battery-sensors
 
 [Install]
 WantedBy=multi-user.target
@@ -67,6 +68,8 @@ sudo systemctl daemon-reload
 sudo systemctl enable fw-fanctrl
 sudo systemctl start fw-fanctrl
 ```
+
+**Note:** The service automatically restores EC fan control to automatic mode on shutdown, so no `ExecStopPost` is needed.
 
 ## Usage
 
